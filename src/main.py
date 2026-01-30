@@ -1,79 +1,68 @@
-from preprocessing import load_image
-from calibration import find_checkerboard_scale
-from image_registration import compute_homography, warp_points, warp_image, overlay_images, stitch_images
-from metrics import compute_distance_mm
-from main import interactive_point_selection
-import matplotlib.pyplot as plt
 import cv2
-import numpy as np
+import matplotlib.pyplot as plt
 
-# ---------------------------
-# CONFIG
-# ---------------------------
-CHECKERBOARD = (3, 6)  # 4x7 squares → inner corners = 3x6
-SQUARE_SIZE_CM = 10
+from preprocessing import load_image, interactive_point_selection
+from calibration import find_checkerboard_scale
+from metrics import compute_distance_mm
+from image_registration import compute_homography, warp_image
 
-img_left = load_image("data\calibration_board\Metrology_Left.jpeg")
-img_right = load_image("data\calibration_board\Metrology_Right.jpeg")
+# ---------------- CONFIG ----------------
+CHECKERBOARD = (3, 6)     # inner corners
+SQUARE_SIZE_CM = 5
 
-# ---------------------------
-# CALIBRATION
-# ---------------------------
+left_image_path = "data/calibration_board/Metrology_Left.jpeg"
+right_image_path = "data/calibration_board/Metrology_Right.jpeg"
+
+# ---------------- LOAD ----------------
+img_left = load_image(left_image_path)
+img_right = load_image(right_image_path)
+
+# ---------------- CALIBRATION ----------------
 scale_left = find_checkerboard_scale(img_left, CHECKERBOARD, SQUARE_SIZE_CM)
 scale_right = find_checkerboard_scale(img_right, CHECKERBOARD, SQUARE_SIZE_CM)
 
-# ---------------------------
-# HOMOGRAPHY
-# ---------------------------
-H_left_to_right = compute_homography(img_left, img_right, CHECKERBOARD)
-if H_left_to_right is None:
-    raise RuntimeError("Homography could not be computed.")
+# ---------------- MEASURE IN EACH IMAGE ----------------
+print("Select measurement points on LEFT image")
+pts_left = interactive_point_selection(img_left, title="LEFT measurement")
+dist_left = compute_distance_mm(pts_left[0], pts_left[1], scale_left)
+print(f"Distance on LEFT image: {dist_left:.2f} mm\n")
 
-# ---------------------------
-# MANUAL POINT SELECTION ON LEFT
-# ---------------------------
-points_left = interactive_point_selection(img_left, num_points=2)
+print("Select measurement points on RIGHT image")
+pts_right = interactive_point_selection(img_right, title="RIGHT measurement")
+dist_right = compute_distance_mm(pts_right[0], pts_right[1], scale_right)
+print(f"Distance on RIGHT image: {dist_right:.2f} mm\n")
 
-# Map points to RIGHT image
-points_right = warp_points(points_left, H_left_to_right)
+# ---------------- HOMOGRAPHY ----------------
+H_L2R = compute_homography(img_left, img_right, CHECKERBOARD)
+H_R2L = compute_homography(img_right, img_left, CHECKERBOARD)
 
-# ---------------------------
-# DISTANCE CALCULATION
-# ---------------------------
-dist_left_mm = compute_distance_mm(points_left[0], points_left[1], scale_left)
-dist_right_mm = compute_distance_mm(points_right[0], points_right[1], scale_right)
-print(f"Distance LEFT: {dist_left_mm:.2f} mm")
-print(f"Distance RIGHT: {dist_right_mm:.2f} mm")
+if H_L2R is not None and H_R2L is not None:
+    # Warp left -> right
+    img_left_in_right = cv2.warpPerspective(img_left, H_L2R, (img_right.shape[1], img_right.shape[0]))
+    # Warp right -> left
+    img_right_in_left = cv2.warpPerspective(img_right, H_R2L, (img_left.shape[1], img_left.shape[0]))
 
-# ---------------------------
-# IMAGE TRANSFORMATION AND OVERLAY
-# ---------------------------
-img_left_in_right = warp_image(img_left, H_left_to_right, (img_right.shape[1], img_right.shape[0]))
-overlay_in_right = overlay_images(img_left_in_right, img_right)
+    # Plot both transformations
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(12, 6))
 
-# ---------------------------
-# IMAGE STITCHING
-# ---------------------------
-panorama = stitch_images(img_left, img_right, H_left_to_right)
+    plt.subplot(2, 2, 1)
+    plt.title("Original LEFT Image")
+    plt.imshow(cv2.cvtColor(img_left, cv2.COLOR_BGR2RGB))
 
-# ---------------------------
-# VISUALIZATION
-# ---------------------------
-plt.figure(figsize=(15,10))
-plt.subplot(2,2,1)
-plt.title("LEFT Image")
-plt.imshow(cv2.cvtColor(img_left, cv2.COLOR_BGR2RGB))
+    plt.subplot(2, 2, 2)
+    plt.title("Original RIGHT Image")
+    plt.imshow(cv2.cvtColor(img_right, cv2.COLOR_BGR2RGB))
 
-plt.subplot(2,2,2)
-plt.title("RIGHT Image")
-plt.imshow(cv2.cvtColor(img_right, cv2.COLOR_BGR2RGB))
+    plt.subplot(2, 2, 3)
+    plt.title("LEFT Image Warped to RIGHT")
+    plt.imshow(cv2.cvtColor(img_left_in_right, cv2.COLOR_BGR2RGB))
 
-plt.subplot(2,2,3)
-plt.title("Overlay LEFT → RIGHT")
-plt.imshow(cv2.cvtColor(overlay_in_right, cv2.COLOR_BGR2RGB))
+    plt.subplot(2, 2, 4)
+    plt.title("RIGHT Image Warped to LEFT")
+    plt.imshow(cv2.cvtColor(img_right_in_left, cv2.COLOR_BGR2RGB))
 
-plt.subplot(2,2,4)
-plt.title("Stitched Panorama")
-plt.imshow(cv2.cvtColor(panorama, cv2.COLOR_BGR2RGB))
-plt.tight_layout()
-plt.show()
+    plt.tight_layout()
+    plt.show()
+else:
+    print("Homography could not be computed for one or both images.")
